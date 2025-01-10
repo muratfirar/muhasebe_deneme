@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+
+{% block title %}Veri Girişi{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Başlık ve Açıklama -->
+    <div class="text-center">
+        <h2 class="text-2xl font-bold text-gray-900">Dönem Verileri Girişi</h2>
+        <p class="mt-2 text-gray-600">E-Defter XML dosyalarınızı yükleyerek analiz edin</p>
+    </div>
+
+    <div class="bg-white shadow-lg rounded-2xl p-8">
+        <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" id="uploadForm">
+            <!-- Dönem Grid -->
+            <div class="grid gap-8 md:grid-cols-{{ max_periods }}">
+                {% for period in range(1, max_periods + 1) %}
+                <div class="bg-gray-50 rounded-xl p-6 transition-all duration-300 hover:shadow-md">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">{{ period }}. Dönem</h3>
+                    
+                    <!-- XML Yükleme -->
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-3">
+                            <h4 class="text-sm font-medium text-gray-700">E-Defter XML</h4>
+                            <span class="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full">Zorunlu</span>
+                        </div>
+                        
+                        <div class="relative border-2 border-dashed rounded-xl p-6 transition-all duration-300 
+                                  hover:border-blue-400 hover:bg-blue-50/30" id="dropZone{{ period }}">
+                            <input type="file" name="file_{{ period }}" accept=".xml" 
+                                   class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                   onchange="handleFileSelect(event, {{ period }})" 
+                                   id="fileInput{{ period }}">
+                            
+                            <!-- Boş Durum -->
+                            <div class="text-center" id="initialState{{ period }}">
+                                <div class="inline-flex items-center justify-center w-12 h-12 rounded-full 
+                                            bg-blue-100 text-blue-500 mb-4">
+                                    <i class="fas fa-upload text-xl"></i>
+                                </div>
+                                <p class="text-sm font-medium text-gray-700">Dosya Seçin</p>
+                                <p class="text-xs text-gray-500 mt-1">veya sürükleyip bırakın</p>
+                            </div>
+
+                            <!-- Seçili Durum -->
+                            <div class="hidden" id="selectedState{{ period }}">
+                                <div class="flex flex-col items-center">
+                                    <div class="inline-flex items-center justify-center w-12 h-12 rounded-full 
+                                                bg-green-100 text-green-500 mb-4">
+                                        <i class="fas fa-check text-xl"></i>
+                                    </div>
+                                    <div class="text-center">
+                                        <p class="text-sm font-medium text-gray-900 mb-1">Dosya Hazır</p>
+                                        <p class="text-xs text-gray-600 max-w-full break-all" id="fileName{{ period }}"></p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- PDF/Excel (Yakında) -->
+                    <div class="opacity-70">
+                        <div class="flex items-center justify-between mb-3">
+                            <h4 class="text-sm font-medium text-gray-700">Beyanname/Mizan</h4>
+                            <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">Yakında</span>
+                        </div>
+                        <div class="p-4 bg-gray-100 rounded-xl border border-gray-200">
+                            <p class="text-sm text-gray-500">PDF ve Excel desteği yakında eklenecek</p>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Yükleme Butonu -->
+            <div class="mt-8 flex justify-center">
+                <button type="submit" 
+                        class="inline-flex items-center px-8 py-3 text-base font-medium text-white 
+                               bg-blue-600 rounded-xl shadow-sm hover:bg-blue-700 
+                               transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed
+                               hover:shadow-blue-100 hover:shadow-lg">
+                    <i class="fas fa-cloud-upload-alt mr-2"></i>
+                    Seçili Dönemleri Yükle
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+let selectedFiles = new Set(); // Seçili dosyaları takip etmek için
+
+function handleFileSelect(event, period) {
+    const file = event.target.files[0];
+    if (file) {
+        const dropZone = document.getElementById(`dropZone${period}`);
+        const initialState = document.getElementById(`initialState${period}`);
+        const selectedState = document.getElementById(`selectedState${period}`);
+        const fileInput = document.getElementById(`fileInput${period}`);
+        const fileName = document.getElementById(`fileName${period}`);
+
+        // Dosya adını göster
+        fileName.textContent = file.name;
+        
+        // Durumları değiştir
+        initialState.classList.add('hidden');
+        selectedState.classList.remove('hidden');
+
+        // Alanın görünümünü güncelle
+        dropZone.classList.remove('hover:border-blue-400', 'hover:bg-blue-50/30');
+        dropZone.classList.add('border-green-500', 'bg-green-50');
+        
+        // Input'u devre dışı bırak
+        fileInput.disabled = false; // Input'u aktif tut
+        dropZone.classList.add('cursor-not-allowed');
+
+        // Bu dönemi seçili dosyalara ekle
+        selectedFiles.add(period);
+        updateSubmitButton();
+    }
+}
+
+function updateSubmitButton() {
+    const submitButton = document.querySelector('#uploadForm button[type="submit"]');
+    if (submitButton) {
+        const hasFiles = selectedFiles.size > 0;
+        submitButton.disabled = !hasFiles;
+        
+        if (!hasFiles) {
+            submitButton.classList.add('opacity-50', 'cursor-not-allowed');
+        } else {
+            submitButton.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+    }
+}
+
+// Sayfa yüklendiğinde
+document.addEventListener('DOMContentLoaded', function() {
+    // Submit butonunu başlangıçta deaktif et
+    updateSubmitButton();
+    
+    // Form submit kontrolü
+    document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        if (selectedFiles.size === 0) {
+            alert('Lütfen en az bir dönem için XML dosyası seçin');
+            return false;
+        }
+
+        // Tüm input'ları kontrol et
+        let formIsValid = false;
+        selectedFiles.forEach(period => {
+            const input = document.getElementById(`fileInput${period}`);
+            if (input && input.files && input.files[0]) {
+                formIsValid = true;
+            }
+        });
+
+        if (!formIsValid) {
+            alert('Lütfen en az bir XML dosyası seçin');
+            return false;
+        }
+
+        // Form geçerliyse submit et
+        const button = this.querySelector('button[type="submit"]');
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Yükleniyor...';
+        }
+
+        try {
+            const formData = new FormData(this);
+            const response = await fetch(this.action, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.redirected) {
+                window.location.href = response.url;
+                return;
+            }
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Dosya yükleme hatası');
+            }
+        } catch (error) {
+            alert(error.message);
+            if (button) {
+                button.disabled = false;
+                button.innerHTML = '<i class="fas fa-cloud-upload-alt mr-2"></i>Seçili Dönemleri Yükle';
+            }
+        }
+    });
+});
+</script>
+{% endblock %} 
