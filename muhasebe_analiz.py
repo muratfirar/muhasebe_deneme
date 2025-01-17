@@ -142,4 +142,4 @@ if __name__ == "__main__":
     
     dosya_yolu = dosya_sec()
     if dosya_yolu:
-        muhasebe_analizi(dosya_yolu) 
+        analiz_yap(dosya_yolu) 

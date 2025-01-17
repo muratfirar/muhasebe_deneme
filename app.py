@@ -4,20 +4,30 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 import os
 from werkzeug.utils import secure_filename
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import TDHPConfig
 from models import db, Firma, FirmaTuru
+from muhasebe_analiz import analiz_yap
+import json
 
 app = Flask(__name__)
 
+# Proje kök dizinini al
+basedir = os.path.abspath(os.path.dirname(__file__))
+
 # Veritabanı konfigürasyonu
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///muhasebe.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://murat:123357789@localhost:5432/muhasebe_db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Diğer konfigürasyonlar
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['SECRET_KEY'] = 'gizli-anahtar-buraya'
 app.config['MAX_PERIODS'] = 3
+
+# Session konfigürasyonu
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
 
 # SQLAlchemy'yi başlat
 db.init_app(app)
@@ -32,7 +42,19 @@ with app.app_context():
 # Jinja2 filtresi - para formatı için
 @app.template_filter('para_format')
 def para_format(value):
-    return f"{float(value):,.2f} ₺"
+    try:
+        if value is None:
+            return "0,00 ₺"
+        return f"{float(value):,.2f} ₺".replace(",", ".")
+    except (ValueError, TypeError):
+        return "0,00 ₺"
+
+# Upload klasörü için MIME type kontrolü ekle
+ALLOWED_EXTENSIONS = {'xml'}
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/', methods=['GET'])
 def index():
@@ -48,53 +70,27 @@ def veri_girisi():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    uploaded_files = []
-    
-    # Her dönem için dosya kontrolü
-    for period in range(1, app.config['MAX_PERIODS'] + 1):
-        file_key = f'file_{period}'
+    if 'file' not in request.files:
+        return jsonify({'error': 'Dosya seçilmedi'}), 400
+        
+    files = []
+    for i in range(1, app.config['MAX_PERIODS'] + 1):
+        file_key = f'file_{i}'
         if file_key in request.files:
             file = request.files[file_key]
-            if file and file.filename != '' and file.filename.endswith('.xml'):
+            if file and file.filename and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(filepath)
+                
                 try:
-                    # XML dosyasını kontrol et
-                    content = file.read()
-                    ET.fromstring(content)  # XML parse edilebilir mi?
-                    file.seek(0)  # Dosya pointer'ı başa al
-                    
-                    # Geçerli XML ise kaydet
-                    filename = secure_filename(f"period_{period}_{file.filename}")
-                    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                    file.save(filepath)
-                    uploaded_files.append((period, filepath))
-                except ET.ParseError:
-                    return jsonify({
-                        'error': f'{period}. dönem için yüklenen dosya geçerli bir XML dosyası değil. ' +
-                                'Lütfen e-defter XML formatında bir dosya seçin.'
-                    }), 400
-    
-    if not uploaded_files:
-        return jsonify({'error': 'Lütfen en az bir XML dosyası seçin'}), 400
-    
-    try:
-        # Tüm dosyaları analiz et
-        for period, filepath in uploaded_files:
-            try:
-                session[f'sonuclar_donem_{period}'] = analiz_yap(filepath)
-                os.remove(filepath)  # Geçici dosyayı sil
-            except Exception as e:
-                return jsonify({
-                    'error': f'{period}. dönem için yüklenen dosya e-defter formatına uygun değil. ' +
-                            'Lütfen geçerli bir e-defter XML dosyası seçin.'
-                }), 400
-        
-        return redirect('/mizan')
-    except Exception as e:
-        # Hata durumunda geçici dosyaları temizle
-        for _, filepath in uploaded_files:
-            if os.path.exists(filepath):
-                os.remove(filepath)
-        return jsonify({'error': str(e)}), 500
+                    sonuclar = analiz_yap(filepath)
+                    session[f'sonuclar_donem_{i}'] = sonuclar
+                    files.append(filename)
+                except Exception as e:
+                    return jsonify({'error': f'Dosya analiz hatası: {str(e)}'}), 400
+
+    return jsonify({'success': True, 'files': files})
 
 @app.route('/mizan', methods=['GET'])
 def mizan():
@@ -214,23 +210,24 @@ def fisler():
 @app.route('/firma-tanim', methods=['GET', 'POST'])
 def firma_tanim():
     if request.method == 'POST':
-        yeni_firma = Firma(
-            firma_turu=request.form['firma_turu'],
+        firma = Firma(
             unvan=request.form['unvan'],
             vergi_no=request.form['vergi_no'],
             vergi_dairesi=request.form['vergi_dairesi'],
-            adres=request.form['adres'],
             telefon=request.form['telefon'],
             email=request.form['email'],
-            yetkili_adi=request.form['yetkili_adi'],
-            yetkili_telefon=request.form['yetkili_telefon'],
-            aciklama=request.form['aciklama']
+            adres=request.form['adres'],
+            firma_turu_id=request.form['firma_turu']
         )
-        db.session.add(yeni_firma)
-        db.session.commit()
-        return redirect(url_for('firma_listesi'))
-    
-    firma_turleri = FirmaTuru.choices()
+        db.session.add(firma)
+        try:
+            db.session.commit()
+            return redirect(url_for('firma_listesi'))
+        except Exception as e:
+            db.session.rollback()
+            return str(e), 400
+            
+    firma_turleri = FirmaTuru.query.all()
     return render_template('firma_tanim.html', firma_turleri=firma_turleri)
 
 @app.route('/firma-listesi')
@@ -264,102 +261,6 @@ def firma_sil(id):
     db.session.delete(firma)
     db.session.commit()
     return '', 204
-
-def analiz_yap(xml_dosya):
-    tree = ET.parse(xml_dosya)
-    root = tree.getroot()
-    
-    # Firma bilgilerini al (XML'de yoksa varsayılan değerler kullan)
-    firma_bilgileri = {
-        'unvan': root.find('.//CompanyName').text if root.find('.//CompanyName') is not None else "Firma Adı Belirtilmemiş",
-        'vkn': root.find('.//TaxNumber').text if root.find('.//TaxNumber') is not None else "VKN Belirtilmemiş",
-        'donem': {
-            'baslangic': root.find('.//FiscalYearStart').text,
-            'bitis': root.find('.//FiscalYearEnd').text
-        }
-    }
-    
-    hesap_bakiyeleri = defaultdict(lambda: {'borc': Decimal('0'), 'alacak': Decimal('0'), 'hesap_adi': ''})
-    fis_listesi = []
-    
-    for entry in root.findall('.//Entry'):
-        fis = {
-            'no': entry.find('.//EntryNumber').text,
-            'tarih': entry.find('.//EnteredDate').text,
-            'aciklama': entry.find('.//EntryComment').text,
-            'satirlar': [],
-            'toplam_borc': Decimal('0'),
-            'toplam_alacak': Decimal('0')
-        }
-        
-        for line in entry.findall('.//Line'):
-            hesap_kodu = line.find('AccountMainID').text
-            hesap_adi = line.find('AccountMainDescription').text
-            tutar = Decimal(line.find('Amount').text)
-            borc_alacak = line.find('DebitCreditCode').text
-            
-            # Hesap adını sakla
-            hesap_bakiyeleri[hesap_kodu]['hesap_adi'] = hesap_adi
-            
-            satir = {
-                'hesap_kodu': hesap_kodu,
-                'hesap_adi': hesap_adi,
-                'tutar': float(tutar),  # Template'de format için float'a çevir
-                'borc_alacak': borc_alacak
-            }
-            
-            if borc_alacak == 'D':
-                hesap_bakiyeleri[hesap_kodu]['borc'] += tutar
-                fis['toplam_borc'] += tutar
-            else:
-                hesap_bakiyeleri[hesap_kodu]['alacak'] += tutar
-                fis['toplam_alacak'] += tutar
-                
-            fis['satirlar'].append(satir)
-            
-        # Fişin toplam tutarlarını float'a çevir
-        fis['toplam_borc'] = float(fis['toplam_borc'])
-        fis['toplam_alacak'] = float(fis['toplam_alacak'])
-        fis_listesi.append(fis)
-    
-    # Mizan hesapla
-    mizan = []
-    toplam = {
-        'borc': Decimal('0'),
-        'alacak': Decimal('0'),
-        'borc_bakiye': Decimal('0'),
-        'alacak_bakiye': Decimal('0')
-    }
-    
-    for hesap_kodu in sorted(hesap_bakiyeleri.keys()):
-        borc = hesap_bakiyeleri[hesap_kodu]['borc']
-        alacak = hesap_bakiyeleri[hesap_kodu]['alacak']
-        borc_bakiye = max(borc - alacak, Decimal('0'))
-        alacak_bakiye = max(alacak - borc, Decimal('0'))
-        
-        toplam['borc'] += borc
-        toplam['alacak'] += alacak
-        toplam['borc_bakiye'] += borc_bakiye
-        toplam['alacak_bakiye'] += alacak_bakiye
-        
-        mizan.append({
-            'hesap_kodu': hesap_kodu,
-            'hesap_adi': hesap_bakiyeleri[hesap_kodu]['hesap_adi'],
-            'borc': float(borc),
-            'alacak': float(alacak),
-            'borc_bakiye': float(borc_bakiye),
-            'alacak_bakiye': float(alacak_bakiye)
-        })
-    
-    # Toplamları float'a çevir
-    toplam = {k: float(v) for k, v in toplam.items()}
-    
-    return {
-        'firma_bilgileri': firma_bilgileri,
-        'fis_listesi': fis_listesi,
-        'mizan': mizan,
-        'toplam': toplam
-    }
 
 if __name__ == '__main__':
     app.run(debug=True, use_reloader=False)  # use_reloader=False ekledik 
